@@ -44,8 +44,10 @@ class Log_Printer{
 public:
     static Log_Printer* get_Log_Printer();
     static ::std::mutex init_mutex;
-    
+    static ::std::mutex log_object_init_lock; //创建log对象时的锁
     Log_Object& get_thread_object();//根据线程号，获得对应的log队列，若还不存在就创建1个队列
+    int init_thread_object();   //针对每个线程来构造对象
+    int release_thread_object();    //针对每个线程来构造对象
     int get_thread_int();   //测试一下
 
     int print_a_line(int level,string& line);
@@ -73,11 +75,12 @@ private:
 
     mutex write_mutex; //写入锁
     mutex add_mutex; //任务添加锁
-    mutex log_object_init_lock; //创建log对象时的锁
     //queue<string> log_queue;
-    
+
+    /*unordered_*/map<pthread_t,Log_Object> thread_log_map;
+
     //每个线程1个队列,用线程号作区分
-    //unordered_map<std::thread::id,Log_Object> log_map;
+    unordered_map<pthread_t,Log_Object> log_map;
     /*草，不能使用unordered_map
     如果使用，那么就会概率性地段错误，使用gdb去看，可以得知错误发生在get_thread_object()内，是一个和哈希表有关的错误，
     [前面是哈希表的类型声明，省略掉]::_M_find_before_node(unsigned long, std::thread::id const&, unsigned long) const ()
@@ -86,7 +89,7 @@ private:
     草。
     */
     //map<std::thread::id,Log_Object> log_map;
-    map<pthread_t,Log_Object> log_map;
+    //map<pthread_t,Log_Object> log_map;
     //专门用于写入的线程，以此达到无锁的操作
     std::thread log_write_thread;
 
@@ -102,7 +105,7 @@ private:
 
     //unordered_map<std::thread::id,int> test_map;
     //map<std::thread::id,int> test_map;
-    map<pthread_t,int> test_map;
+    //map<pthread_t,int> test_map;
 };
 }
 #endif

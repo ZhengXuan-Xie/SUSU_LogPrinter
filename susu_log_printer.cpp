@@ -4,6 +4,12 @@
 namespace susu_tools{
     
 Log_Printer* Log_Printer_handle = NULL;
+::std::mutex Log_Printer::init_mutex;
+
+//unordered_map<pthread_t,Log_Object*>* Log_Printer::thread_log_map = NULL;
+::std::mutex Log_Printer::log_object_init_lock; 
+
+
 Log_Printer* Log_Printer::get_Log_Printer()
 {
     if(Log_Printer_handle == NULL)
@@ -12,13 +18,13 @@ Log_Printer* Log_Printer::get_Log_Printer()
         if(Log_Printer_handle == NULL)
         {
             Log_Printer_handle = new Log_Printer();
+            //thread_log_map = new unordered_map<pthread_t,Log_Object*>();
         }
         init_mutex.unlock();
     }
     return Log_Printer_handle;
 }
 
-::std::mutex Log_Printer::init_mutex;
 
 Log_Printer::Log_Printer()
 {
@@ -60,7 +66,7 @@ int Log_Printer::print_a_line(int level,::std::string& line)
     //add_mutex.lock();
     //head = line_head;
     Log_Object& ret = get_thread_object();
-    int temp_test = get_thread_int();
+    //int temp_test = get_thread_int();
     ret.head = line_head;
     //while(true)//自旋锁 
     //{
@@ -131,7 +137,7 @@ int Log_Printer::write_to_file()
     if(outputFile.is_open())
     {
         Log_Object& ret = get_thread_object();
-        int temp_test = get_thread_int();
+        //int temp_test = get_thread_int();
         int i=0;
         while(ret.log_queue.empty() == false/*&& i < limit*/)
         {
@@ -157,21 +163,83 @@ int Log_Printer::write_to_file()
 
 Log_Object& Log_Printer::get_thread_object()
 {
-    //std::thread::id thread_id = std::this_thread::get_id();
+    /*//std::thread::id thread_id = std::this_thread::get_id();
+
+    //log_object_init_lock.lock();
     pthread_t thread_id = pthread_self();
     if( log_map.find(thread_id) == log_map.end() )
     {
         //注意，由于线程id具有唯一性，所以不存在2个线程同时插入1个 pid 的情况，此处无需使用双锁
         log_object_init_lock.lock();
-        /*if( log_map.find(thread_id) == log_map.end() )
-        {*/
+        if( log_map.find(thread_id) == log_map.end() )
+        {
             Log_Object temp;
             //log_map.insert(std::pair<std::thread::id,Log_Object>(thread_id,temp));
-            log_map.insert(std::pair<pthread_t,Log_Object>(thread_id,temp));
-        /*}*/
+            //log_map.insert(std::pair<pthread_t,Log_Object>(thread_id,temp));
+            log_map[thread_id]=temp;
+        }
         log_object_init_lock.unlock();
     }
-    return log_map[thread_id];
+    //log_object_init_lock.unlock();*/
+    //这种写法不行,因为有缓存局部性.
+    //在别的线程已经init了1次，但是本线程看不到，还是会认为log_map.find(thread_id) 是 log_map.end()
+    //因为这个线程在上锁前加载了1次 log_map,因而具有缓存局部性。且log_map并不是一个原子变量，锁才是。就算获得了锁，局部缓存也没有被刷新。因此会导致检测为空，然后多次init();
+
+    //std::thread::id thread_id = std::this_thread::get_id();
+
+    //log_object_init_lock.lock();
+    pthread_t thread_id = pthread_self();
+    /*get_Log_Printer();  //确保哈希表已经构造
+    if( (*thread_log_map).find(thread_id) == (*thread_log_map).end() )
+    {
+        log_object_init_lock.lock();
+        if( (*thread_log_map).find(thread_id) == (*thread_log_map).end() )
+        {
+            Log_Object* temp = new Log_Object();
+            (*thread_log_map)[thread_id]= temp;//map不能重复插入同一个key，需要用[]进行更新。最好也用[]进行插入。
+        }
+        log_object_init_lock.unlock();
+    }
+    return (*thread_log_map)[thread_id];
+    */
+    /*
+    get_Log_Printer();  //确保哈希表已经构造
+    if( thread_log_map.find(thread_id) == thread_log_map.end() )
+    {
+        log_object_init_lock.lock();
+        if( thread_log_map.find(thread_id) == thread_log_map.end() )
+        {
+            Log_Object temp;
+            (thread_log_map)[thread_id]= temp;//map不能重复插入同一个key，需要用[]进行更新。最好也用[]进行插入。
+        }
+        log_object_init_lock.unlock();
+    }*/
+    return thread_log_map[thread_id];
+}
+int Log_Printer::init_thread_object()   //针对每个线程来构造对象
+{
+    pthread_t thread_id = pthread_self();
+    log_object_init_lock.lock();
+    if( thread_log_map.find(thread_id) == thread_log_map.end() )
+    {
+        Log_Object temp;
+        thread_log_map[thread_id]= temp;//unordered_map不能重复插入同一个key，需要用[]进行更新。最好也用[]进行插入。
+        printf("init a thread_object in %ld\n",thread_id);
+    }
+    log_object_init_lock.unlock();
+    return 0;
+}
+int Log_Printer::release_thread_object()    //针对每个线程来构造对象
+{
+    pthread_t thread_id = pthread_self();
+    log_object_init_lock.lock();
+    if( thread_log_map.find(thread_id) != thread_log_map.end() )
+    {
+        thread_log_map.erase(thread_id);
+        printf("release a thread_object in %ld\n",thread_id);
+    }
+    log_object_init_lock.unlock();
+    return 0;
 }
 void Log_Printer::print_immediately()
 {
@@ -255,7 +323,7 @@ int Log_Printer::print_a_line_async(int level,::std::string& line)
     sprintf(line_head,"\n%d:%d:%d ",time_formated->tm_hour,time_formated->tm_min,time_formated->tm_sec);
 
     Log_Object& ret = get_thread_object();
-    int temp_test = get_thread_int();
+    //int temp_test = get_thread_int();
     ret.head = line_head;
             ret.log_queue.push(::std::forward<::std::string>(std::move(ret.head.append(line))) );//head + " " +line是一个临时对象,这里分配了内存。现在要考虑的是，能否在push的时候不新建对象？而是使用右值引用。
             if(ret.log_queue.size() >= print_limit) //队列满了，或者遇到高优先级的log，马上执行1次输出。
@@ -325,18 +393,25 @@ int Log_Printer::write_to_file_async(queue<string>&& log_print_object)
     
     return 0;
 }
+
+
 int Log_Printer::get_thread_int()
 {
     //std::thread::id thread_id = std::this_thread::get_id();
-    pthread_t thread_id = pthread_self();
+/*    pthread_t thread_id = pthread_self();
     if( test_map.find(thread_id) == test_map.end() )
     {
-        write_mutex.lock();
-        test_map.insert(std::pair<pthread_t,int>(thread_id,1));
-        //printf("you build a int in thread id %lu\n",thread_id);
-        puts("you build a int in thread id");
-        write_mutex.unlock();
+        add_mutex.lock();
+        if( test_map.find(thread_id) == test_map.end() )
+        {
+            test_map.insert(std::pair<pthread_t,int>(thread_id,1));
+            //printf("you build a int in thread id %lu\n",thread_id);
+            puts("you build a int in thread id");
+        }
+        add_mutex.unlock();
     }
     return test_map[thread_id];
+    */
+    return 0;
 }
 }
