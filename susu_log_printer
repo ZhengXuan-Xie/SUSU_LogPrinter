@@ -1,0 +1,109 @@
+#ifndef SUSU_LOG_PRINTER
+#define SUSU_LOG_PRINTER
+
+#include <queue>
+using std::queue;
+
+#include <unordered_map>
+using std::unordered_map;
+using std::string;
+#include <map>
+using std::map;
+
+
+#include <mutex>
+using std::mutex;
+
+#include <functional>
+
+//一行Log最多4*1024个字节
+#define line_bytes 4*1024
+//当存储数量达到了1024行log再一次性打印
+#define print_limit 32
+
+#include <fstream>
+#include <atomic>
+#include <thread>
+#include <pthread.h>
+
+#include<ctime>
+#include<stdio.h>
+namespace susu_tools{
+
+class Log_Object{
+public:
+    string head; //一行log的头部，主要存储时间信息
+    queue<string> log_queue;
+    //写入任务队列，当一个对象要求写入，则构造一个任务插入到任务队列中，由写入线程完成写入。
+    
+    ::std::queue< ::std::function<void(queue<string>&&)> > task_queue;  //lambda function task
+    queue<queue<string>> log_part;
+};
+
+class Log_Printer{
+public:
+    static Log_Printer* get_Log_Printer();
+    static ::std::mutex init_mutex;
+    
+    Log_Object& get_thread_object();//根据线程号，获得对应的log队列，若还不存在就创建1个队列
+    int get_thread_int();   //测试一下
+
+    int print_a_line(int level,string& line);
+    void print_immediately();   //马上手动执行1次打印，一般用于清空所有待打印的log。
+    
+    
+    int set_path(string path);
+    
+    //int write_to_file(Log_Object& log_print_object,int limit);
+    int write_to_file();
+
+    int print_a_line_async(int level,string& line);
+    void add_a_task(Log_Object&& ret);   //添加一个任务到 任务队列内，由写入线程执行这个写入任务
+    void work_loop();   //写入循环
+    int write_to_file_async(queue<string>&& log_print_object);  //异步写入
+
+    void set_print_level(int n){print_level = n;}
+    int get_print_level(){return print_level;}
+    
+    void set_immediately_print_level(int n){immediately_print_level = n;}
+    int get_immediately_print_level(){return immediately_print_level;}
+
+private:
+    string file; //指向log文件名的字符串
+
+    mutex write_mutex; //写入锁
+    mutex add_mutex; //任务添加锁
+    mutex log_object_init_lock; //创建log对象时的锁
+    //queue<string> log_queue;
+    
+    //每个线程1个队列,用线程号作区分
+    //unordered_map<std::thread::id,Log_Object> log_map;
+    /*草，不能使用unordered_map
+    如果使用，那么就会概率性地段错误，使用gdb去看，可以得知错误发生在get_thread_object()内，是一个和哈希表有关的错误，
+    [前面是哈希表的类型声明，省略掉]::_M_find_before_node(unsigned long, std::thread::id const&, unsigned long) const ()
+    我百思不得其解。偶然间想到，unordered_map不为元素排序。但是这里显然使用了find_before_node的操作，会不会是因为这里存在隐含的排序，而unordered_map不支持排序，导致当前node的next是一个NULL呢？
+    我换了另一种结构，map，就没再出过问题了。
+    草。
+    */
+    //map<std::thread::id,Log_Object> log_map;
+    map<pthread_t,Log_Object> log_map;
+    //专门用于写入的线程，以此达到无锁的操作
+    std::thread log_write_thread;
+
+    //任务必须包括写入的log行数，只要提供了行数，写入线程就知道要让多少个元素出队，写入时严格按照这个数字来执行。
+    //这样，log对象就可以继续在队尾添加log，无需关心写入线程取出并移除队首元素
+
+    string log_path;
+    std::atomic<int> lock;
+    Log_Printer();
+    ~Log_Printer();
+    int print_level;
+    int immediately_print_level;
+
+    //unordered_map<std::thread::id,int> test_map;
+    //map<std::thread::id,int> test_map;
+    map<pthread_t,int> test_map;
+};
+}
+#endif
+
